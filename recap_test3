@@ -17,7 +17,7 @@ CAPTCHA_API_KEY = "9e44559e4f334994e5f19e12678b31c0"
 BTN_ID = "ctl00$ctl00$content$contentMainBody$btnSearch"
 
 # Excel 文件設定
-EXCEL_FILE = "/home/pi/Downloads/SG01-customer list for InvoiceNow_20250916 - 1 .xlsx"  # 請修改為你的Excel文件名稱
+EXCEL_FILE = "/root/ASG2.xlsx"  # 請修改為你的Excel文件名稱
 QUERY_COLUMN = "Company Name"  # 請修改為包含查詢內容的列名
 # 初始化 2captcha solver
 solver = TwoCaptcha(apiKey=CAPTCHA_API_KEY)
@@ -224,11 +224,6 @@ async def main():
     
     # 讀取Excel文件中的查詢列表
     queries = read_queries_from_excel(EXCEL_FILE, QUERY_COLUMN)
-    
-    # 如果讀取失敗，使用預設查詢
-    if not queries:
-        print("Excel讀取失敗或為空，使用預設查詢")
-        queries = [TEST_QUERY]
     
     print(f"準備處理 {len(queries)} 個查詢")
     async with async_playwright() as p:
