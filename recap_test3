@@ -1,0 +1,343 @@
+from playwright.async_api import async_playwright
+from twocaptcha import TwoCaptcha
+import asyncio
+from time import sleep
+import json
+import csv
+from pathlib import Path
+import pandas as pd
+
+import re
+from typing import List
+
+# 設定常數
+URL = "https://mytax.iras.gov.sg/ESVWeb/default.aspx?target=MGSTListingSearch"
+SITEKEY = "6LdK17MUAAAAAMBnx7QwZdiB4XSpNAP6TCvNQv1A"
+CAPTCHA_API_KEY = "9e44559e4f334994e5f19e12678b31c0"
+BTN_ID = "ctl00$ctl00$content$contentMainBody$btnSearch"
+
+# Excel 文件設定
+EXCEL_FILE = "/home/pi/Downloads/SG01-customer list for InvoiceNow_20250916 - 1 .xlsx"  # 請修改為你的Excel文件名稱
+QUERY_COLUMN = "Company Name"  # 請修改為包含查詢內容的列名
+# 初始化 2captcha solver
+solver = TwoCaptcha(apiKey=CAPTCHA_API_KEY)
+def read_queries_from_excel(file_path: str, column_name: str):
+    """從Excel文件讀取查詢列表"""
+    try:
+        df = pd.read_excel(file_path)
+        if column_name not in df.columns:
+            print(f"錯誤：在Excel文件中找不到列 '{column_name}'")
+            print(f"可用的列名：{list(df.columns)}")
+            return []
+        
+        queries = df[column_name].dropna().astype(str).tolist()
+        print(f"從Excel讀取到 {len(queries)} 個查詢")
+        return queries
+    except Exception as e:
+        print(f"讀取Excel文件失敗：{e}")
+        return []
+
+def _clean(s: str) -> str:
+    return " ".join((s or "").split())
+    
+def solve_captcha(url: str):
+    """解決 reCAPTCHA"""
+    try:
+        result = solver.recaptcha(
+            sitekey=SITEKEY,
+            url=url,
+            version="v2",
+        )
+        print(f"CAPTCHA 解決成功: {result}")
+        return result
+    except Exception as e:
+        print(f"CAPTCHA 解決失敗: {e}")
+        raise Exception("CAPTCHA 解決失敗")
+"""        
+async def scrape_and_save(page, query, json_path="results.json", csv_path="results.csv"):
+    爬取數據並保存到文件
+    # 有時會整頁跳轉，有時是局部更新，兩種都兼容
+    try:
+        await page.wait_for_url("**/default.aspx?target=MGSTListingResult*", timeout=60000)
+    except:
+        pass  # 可能是局部更新，直接等結果列
+
+    # ✅ 用屬性選擇器，避免 #0approw 的 CSS 限制
+    row_selector = "tr[id='0approw'], tr[id='0appow'], tr[id$='approw'], tr[id$='appow']"
+    
+    try:
+        await page.wait_for_selector(row_selector, timeout=30000)
+        row = page.locator(row_selector).first
+
+        # 取第 2、3、4 個 <td>
+        tds = row.locator("td")
+        td_count = await tds.count()
+        if td_count < 7:
+            # 除錯訊息：把找到的列 id 印出來
+            ids = await page.locator("tr[id]").evaluate_all("els => els.map(e => e.id)")
+            print(f"警告：<td> 不足 4 個（只看到 {td_count} 個）。查詢：{query}")
+            record = {"Query": query, "GSTRegNo": "未找到", "UEN": "未找到", "Name": "未找到", "Status": "數據不完整"}
+        else:
+            gst_reg_no = _clean(await tds.nth(1).inner_text())  # 第2個 <td>
+            uen        = _clean(await tds.nth(2).inner_text())  # 第3個 <td>
+            name       = _clean(await tds.nth(3).inner_text())  # 第4個 <td>
+            status     = _clean(await tds.nth(4).inner_text())  # 第5個 <td>
+            registered_from = _clean(await tds.nth(5).inner_text())  # 第6個 <td>
+            registered_to = _clean(await tds.nth(6).inner_text())  # 第7個 <td>
+            remark = _clean(await tds.nth(7).inner_text())  # 第8個 <td>
+            record = {"Query": query, "GSTRegNo": gst_reg_no, "UEN": uen, "Name": name, "Status": status, "Registered From": registered_from, "Registered_To":registered_to, "Remark":remark}
+            
+    except Exception as e:
+        print(f"未找到結果或發生錯誤，查詢：{query}，錯誤：{e}")
+        record = {"Query": query, "GSTRegNo": "未找到", "UEN": "未找到", "Name": "未找到", "Status": "未找到結果"}
+
+    print(f"查詢 '{query}' 的結果：", record)
+
+    # 讀取現有的JSON數據（如果存在）
+    json_data = []
+    if Path(json_path).exists():
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                json_data = json.load(f)
+    #    except:
+    #        json_data = []
+    
+    # 添加新記錄
+    #json_data.append(record)
+    
+    # 寫回JSON文件
+    #with open(json_path, "w", encoding="utf-8") as f:
+    #    json.dump(json_data, f, ensure_ascii=False, indent=2)
+    #print(f"已更新 JSON：{Path(json_path).resolve()}")
+
+    # 寫 CSV（追加；若不存在先寫 header）
+    # write_header = not Path(csv_path).exists()
+    #with open(csv_path, "a", newline="", encoding="utf-8") as f:
+    #    w = csv.DictWriter(f, fieldnames=["Query", "GSTRegNo", "UEN", "Name", "Status"])
+    #    if write_header:
+    #        w.writeheader()
+    #    w.writerow(record)
+    #print(f"已更新 CSV：{Path(csv_path).resolve()}")
+
+    # return record
+    """       
+
+async def scrape_and_save(page, query: str, json_path: str = "results.json", csv_path: str = "results.csv") -> List[dict]:
+    """抓取整個結果表（排除表頭與手機版折疊列），一次寫回 JSON。"""
+    # 有時整頁跳轉，有時局部更新，兩種都兼容
+    try:
+        await page.wait_for_url("**/default.aspx?target=MGSTListingResult*", timeout=60000)
+    except:
+        pass
+
+    # ✅ 只選「主資料列」：id 以 appro w 結尾，排除 .mobrow（手機折疊複製列）
+    #   也考慮 typo：appow
+    row_selector = "tbody tr[id$='approw']:not(.mobrow), tbody tr[id$='appow']:not(.mobrow)"
+
+    try:
+        await page.wait_for_selector(row_selector, timeout=30000)
+    except Exception as e:
+        print(f"找不到結果列表，查詢：{query}，錯誤：{e}")
+        # 也要回存一筆失敗紀錄，避免漏掉查詢
+        failed_record = {
+            "Query": query, "GSTRegNo": "未找到", "UEN": "未找到",
+            "Name": "未找到", "Status": "未找到結果",
+            "Registered_From": "", "Registered_To": "", "Remark": ""
+        }
+        # 單讀寫
+        exist = []
+        if Path(json_path).exists():
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    exist = json.load(f)
+            except:
+                exist = []
+        exist.append(failed_record)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(exist, f, ensure_ascii=False, indent=2)
+        print(f"已更新 JSON（失敗紀錄）：{Path(json_path).resolve()}")
+        return [failed_record]
+
+    rows = page.locator(row_selector)
+    row_count = await rows.count()
+
+    records: List[dict] = []
+    for i in range(row_count):
+        row = rows.nth(i)
+        tds = row.locator("td")
+        td_count = await tds.count()
+
+        if td_count < 8:
+            print(f"第 {i+1} 列 <td> 數量不足（{td_count}）")
+            rec = {
+                "Query": query,
+                "GSTRegNo": "未找到",
+                "UEN": "未找到",
+                "Name": "未找到",
+                "Status": "數據不完整",
+                "Registered_From": "",
+                "Registered_To": "",
+                "Remark": ""
+            }
+        else:
+            gst_reg_no      = _clean(await tds.nth(1).inner_text())  # 第2格
+            uen             = _clean(await tds.nth(2).inner_text())  # 第3格
+            name            = _clean(await tds.nth(3).inner_text())  # 第4格
+            status          = _clean(await tds.nth(4).inner_text())  # 第5格
+            registered_from = _clean(await tds.nth(5).inner_text())  # 第6格
+            registered_to   = _clean(await tds.nth(6).inner_text())  # 第7格
+            remark          = _clean(await tds.nth(7).inner_text())  # 第8格（含 div/span 也能取到文字）
+
+            rec = {
+                "Query": query,
+                "GSTRegNo": gst_reg_no,
+                "UEN": uen,
+                "Name": name,
+                "Status": status,
+                "Registered_From": registered_from,
+                "Registered_To": registered_to,
+                "Remark": remark
+            }
+
+        records.append(rec)
+
+    # ===== 單讀寫：讀一次舊檔、合併、寫回一次 =====
+    existing = []
+    if Path(json_path).exists():
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except:
+            existing = []
+    existing.extend(records)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
+    print(f"已寫入 {len(records)} 筆（本次查詢），總筆數 {len(existing)} → {Path(json_path).resolve()}")
+
+    # 如果你日後要啟用 CSV，可在這裡一次性把 `records` 追加寫入，而不是逐列 I/O。
+    # （略）
+
+    return records
+            
+            
+async def main():
+    
+    # 讀取Excel文件中的查詢列表
+    queries = read_queries_from_excel(EXCEL_FILE, QUERY_COLUMN)
+    
+    # 如果讀取失敗，使用預設查詢
+    if not queries:
+        print("Excel讀取失敗或為空，使用預設查詢")
+        queries = [TEST_QUERY]
+    
+    print(f"準備處理 {len(queries)} 個查詢")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        page = await browser.new_page()
+        try:
+            # 循環處理每個查詢
+            for i, current_query in enumerate(queries, 1):
+                print(f"\n=== 處理第 {i}/{len(queries)} 個查詢：{current_query} ===")
+                        
+                try:
+                    # Step 1: 前往網站
+                    print("正在載入網站...")
+                    await page.goto(URL)
+                    await page.wait_for_load_state("networkidle")
+                    await page.wait_for_timeout(2000)
+                    
+                    # Step 2: 點擊 reCAPTCHA checkbox
+
+                    print("點擊 reCAPTCHA checkbox...")
+                    frame = page.frame_locator("iframe[title='reCAPTCHA']")
+                    await frame.locator(".recaptcha-checkbox-border").click()
+                    await page.wait_for_timeout(1000)
+                    
+                    # Step 3: 解決 CAPTCHA
+                    print("正在解決 CAPTCHA...")
+                    result = solve_captcha(URL)
+                    solved_token = result['code']
+                    
+                    # Step 4: 將 token 填入頁面
+                    print("填入 CAPTCHA token...")
+                    await page.evaluate("""
+                    (token) => {
+                        const ta = document.getElementById('g-recaptcha-response');
+                        if (ta) {
+                            ta.value = token;
+                            ta.style.display = 'block';
+                        }
+                        const hidden = document.getElementById('validateRecaptchaToken');
+                        if (hidden) hidden.value = token;
+                        
+                        // 觸發相關事件
+                        if (typeof window.captchaSubmit === 'function') {
+                            try { window.captchaSubmit(token); } catch(e) {}
+                        }
+                        
+                        console.log('reCAPTCHA token 已設置');
+                    }""", solved_token)
+                    
+                    await page.wait_for_timeout(1000)
+                    
+                    # Step 5: 填寫搜索關鍵字
+                    print("填寫搜索關鍵字...")
+                    await page.fill("#txtKeyword",  current_query)
+                    print(f"填寫搜索關鍵字：{current_query}")
+                   
+                    # 驗證填寫內容
+                    keyword_value = await page.input_value("#txtKeyword")
+                    recaptcha_filled = await page.evaluate("document.getElementById('g-recaptcha-response').value.length > 0")
+                    print(f"關鍵字: {keyword_value}")
+                    print(f"reCAPTCHA 已填入: {recaptcha_filled}")
+                    
+                    success = False
+                    
+                    # Step 6: 點擊搜索按鈕
+                    try:
+
+                        await page.mouse.move(823, 585, steps=10)
+                        await page.mouse.click(823, 585)
+                        sleep(1)
+                        await page.mouse.click(823, 585)
+                        sleep(1)
+                        await page.mouse.click(823, 585)
+                        
+
+
+                        success = True
+                        
+                    except (ValueError, Exception) as e:
+                        print(f"手動座標點擊失敗: {e}")
+                    # Step 7: 爬取並保存結果
+                    await scrape_and_save(page, current_query, json_path="results.json", csv_path="results.csv")
+
+                    print(f"查詢 '{current_query}' 完成")
+                    
+                    # 在查詢之間等待
+                    if i < len(queries):
+                        print("等待3秒後處理下一個查詢...")
+                        await page.wait_for_timeout(3000)
+                        
+                except Exception as e:
+                    print(f"處理查詢 '{current_query}' 時發生錯誤：{e}")
+                    # 記錄錯誤
+                    error_record = {"Query": current_query, "GSTRegNo": "錯誤", "UEN": "錯誤", "Name": "錯誤", "Status": f"錯誤：{str(e)}"}
+                    
+                    # 保存錯誤記錄到CSV
+                    write_header = not Path("results.csv").exists()
+                    with open("results.csv", "a", newline="", encoding="utf-8") as f:
+                        w = csv.DictWriter(f, fieldnames=["Query", "GSTRegNo", "UEN", "Name", "Status"])
+                        if write_header:
+                            w.writeheader()
+                        w.writerow(error_record)
+                    continue
+                    
+            print(f"\n所有查詢處理完成！共處理了 {len(queries)} 個查詢")
+            print("結果已保存到 results.json 和 results.csv")
+            
+        finally:
+            input("pause")
+
+if __name__ == '__main__':
+    asyncio.run(main())
